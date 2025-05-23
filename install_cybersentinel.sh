@@ -137,43 +137,43 @@ EOF
     echo ""
 }
 
-# Function to install Docker and Docker Compose
+# Install Docker and Docker Compose
 install_docker() {
-    header "Installing Container Runtime Environment..."
+    log "Starting Docker installation..."
     
+    # Check if Docker is already installed
     if command_exists docker && command_exists docker-compose; then
-        success "Container runtime already installed"
+        success "Docker and Docker Compose are already installed!"
         return
     fi
     
-    # Update system
-    log "Updating system packages..."
-    apt update -qq && apt upgrade -y -qq
+    # Update package lists
+    log "Updating package lists..."
+    apt update || error "Failed to update package lists."
     
     # Install prerequisites
-    log "Installing container runtime dependencies..."
-    apt install -y -qq apt-transport-https ca-certificates curl software-properties-common gnupg lsb-release
+    log "Installing prerequisites..."
+    apt install -y apt-transport-https ca-certificates curl software-properties-common || error "Failed to install prerequisites."
     
-    # Add Docker GPG key and repository
-    log "Configuring container runtime repository..."
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - >/dev/null 2>&1
-    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" >/dev/null 2>&1
+    # Add Docker's official GPG key
+    log "Adding Docker's GPG key..."
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - || error "Failed to add Docker's GPG key."
+    
+    # Add Docker repository
+    log "Adding Docker repository..."
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" || error "Failed to add Docker repository."
     
     # Install Docker
-    log "Installing container runtime..."
-    apt update -qq
-    apt install -y -qq docker-ce docker-ce-cli containerd.io
+    log "Installing Docker..."
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io || error "Failed to install Docker."
     
     # Install Docker Compose
-    log "Installing container orchestration tools..."
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose >/dev/null 2>&1
-    chmod +x /usr/local/bin/docker-compose
+    log "Installing Docker Compose..."
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || error "Failed to download Docker Compose."
+    chmod +x /usr/local/bin/docker-compose || error "Failed to set permissions for Docker Compose."
     
-    # Start Docker service
-    systemctl enable docker >/dev/null 2>&1
-    systemctl start docker >/dev/null 2>&1
-    
-    success "Container runtime environment installed successfully"
+    success "Docker and Docker Compose have been successfully installed!"
 }
 
 # Function to install Node.js
