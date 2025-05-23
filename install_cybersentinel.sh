@@ -33,6 +33,35 @@ show_loading() {
     printf "\r✓ %s\n" "$message"
 }
 
+# Enhanced progress bar function
+show_progress() {
+    local current=$1
+    local total=$2
+    local message=$3
+    local width=50
+    local percentage=$((current * 100 / total))
+    local completed=$((current * width / total))
+    local remaining=$((width - completed))
+    
+    printf "\r${BLUE}[INFO]${NC} %s [" "$message"
+    printf "%*s" $completed | tr ' ' '█'
+    printf "%*s" $remaining | tr ' ' '░'
+    printf "] %d%%" $percentage
+    
+    if [ $current -eq $total ]; then
+        printf "\n"
+    fi
+}
+
+# Installation step tracker
+declare -g STEP_CURRENT=0
+declare -g STEP_TOTAL=12
+
+next_step() {
+    STEP_CURRENT=$((STEP_CURRENT + 1))
+    show_progress $STEP_CURRENT $STEP_TOTAL "$1"
+}
+
 # Function to log with colors
 log() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -104,6 +133,31 @@ check_system_requirements() {
     success "System requirements check completed"
 }
 
+# Enhanced logging with file output
+LOG_FILE="/var/log/cybersentinel-install.log"
+
+setup_logging() {
+    mkdir -p /var/log
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+    echo "=== CyberSentinel Installation Started: $(date) ===" >> "$LOG_FILE"
+}
+
+log_with_file() {
+    local level=$1
+    local message=$2
+    echo -e "${BLUE}[INFO]${NC} $message"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $message" >> "$LOG_FILE"
+}
+
+error_with_file() {
+    local message=$1
+    echo -e "${RED}[ERROR]${NC} $message"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $message" >> "$LOG_FILE"
+    echo -e "${YELLOW}Check detailed logs at: $LOG_FILE${NC}"
+    exit 1
+}
+
 # Function to create banner
 show_banner() {
     clear
@@ -137,41 +191,45 @@ EOF
     echo ""
 }
 
-# Install Docker and Docker Compose
+# Replace the entire install_docker() function with this enhanced version
 install_docker() {
-    log "Starting Docker installation..."
+    next_step "Installing Docker and Docker Compose..."
     
     # Check if Docker is already installed
     if command_exists docker && command_exists docker-compose; then
-        success "Docker and Docker Compose are already installed!"
+        log_with_file "INFO" "Docker and Docker Compose are already installed!"
         return
     fi
     
     # Update package lists
-    log "Updating package lists..."
-    apt update || error "Failed to update package lists."
+    log_with_file "INFO" "Updating package lists..."
+    apt update >> "$LOG_FILE" 2>&1 || error_with_file "Failed to update package lists."
     
     # Install prerequisites
-    log "Installing prerequisites..."
-    apt install -y apt-transport-https ca-certificates curl software-properties-common || error "Failed to install prerequisites."
+    log_with_file "INFO" "Installing prerequisites..."
+    apt install -y apt-transport-https ca-certificates curl software-properties-common >> "$LOG_FILE" 2>&1 || error_with_file "Failed to install prerequisites."
     
     # Add Docker's official GPG key
-    log "Adding Docker's GPG key..."
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - || error "Failed to add Docker's GPG key."
+    log_with_file "INFO" "Adding Docker's GPG key..."
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - >> "$LOG_FILE" 2>&1 || error_with_file "Failed to add Docker's GPG key."
     
     # Add Docker repository
-    log "Adding Docker repository..."
-    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" || error "Failed to add Docker repository."
+    log_with_file "INFO" "Adding Docker repository..."
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" >> "$LOG_FILE" 2>&1 || error_with_file "Failed to add Docker repository."
     
     # Install Docker
-    log "Installing Docker..."
-    apt update
-    apt install -y docker-ce docker-ce-cli containerd.io || error "Failed to install Docker."
+    log_with_file "INFO" "Installing Docker..."
+    apt update >> "$LOG_FILE" 2>&1
+    apt install -y docker-ce docker-ce-cli containerd.io >> "$LOG_FILE" 2>&1 || error_with_file "Failed to install Docker."
     
     # Install Docker Compose
-    log "Installing Docker Compose..."
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || error "Failed to download Docker Compose."
-    chmod +x /usr/local/bin/docker-compose || error "Failed to set permissions for Docker Compose."
+    log_with_file "INFO" "Installing Docker Compose..."
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose >> "$LOG_FILE" 2>&1 || error_with_file "Failed to download Docker Compose."
+    chmod +x /usr/local/bin/docker-compose >> "$LOG_FILE" 2>&1 || error_with_file "Failed to set permissions for Docker Compose."
+    
+    # Start and enable Docker
+    systemctl start docker >> "$LOG_FILE" 2>&1
+    systemctl enable docker >> "$LOG_FILE" 2>&1
     
     success "Docker and Docker Compose have been successfully installed!"
 }
@@ -192,11 +250,158 @@ install_nodejs() {
     log "Installing application runtime..."
     apt install -y -qq nodejs
     
-    # Install PM2 globally
-    log "Installing process manager..."
-    npm install -g pm2 >/dev/null 2>&1
-    
     success "Application runtime environment installed successfully"
+}
+
+# NEW FUNCTION: Create systemd services instead of PM2
+create_systemd_services() {
+    next_step "Creating CyberSentinel System Services..."
+    
+    # Create service user
+    log_with_file "INFO" "Creating service user..."
+    useradd -r -s /bin/false cybersentinel || true
+    chown -R cybersentinel:cybersentinel "$PROJECT_DIR"
+    
+    # Create data collector service
+    cat > /etc/systemd/system/cybersentinel-collector.service << EOF
+[Unit]
+Description=CyberSentinel Data Collector
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=cybersentinel
+WorkingDirectory=$PROJECT_DIR
+ExecStart=/usr/bin/node scripts/new-graylog-to-kafka.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cybersentinel-collector
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create backend API service
+    cat > /etc/systemd/system/cybersentinel-backend.service << EOF
+[Unit]
+Description=CyberSentinel Backend API
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=cybersentinel
+WorkingDirectory=$PROJECT_DIR/backend
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cybersentinel-backend
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Create frontend service
+    cat > /etc/systemd/system/cybersentinel-frontend.service << EOF
+[Unit]
+Description=CyberSentinel Frontend UI
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=cybersentinel
+WorkingDirectory=$PROJECT_DIR/frontend
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cybersentinel-frontend
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Reload systemd and enable services
+    systemctl daemon-reload >> "$LOG_FILE" 2>&1
+    systemctl enable cybersentinel-collector cybersentinel-backend cybersentinel-frontend >> "$LOG_FILE" 2>&1
+    
+    success "System services created successfully"
+}
+
+# NEW FUNCTION: Setup Nginx reverse proxy
+setup_nginx() {
+    next_step "Configuring Nginx Reverse Proxy..."
+    
+    # Install Nginx
+    log_with_file "INFO" "Installing Nginx..."
+    apt install -y nginx >> "$LOG_FILE" 2>&1 || error_with_file "Failed to install Nginx"
+    
+    # Create Nginx configuration
+    cat > /etc/nginx/sites-available/cybersentinel << EOF
+server {
+    listen 80;
+    server_name $IP_ADDRESS localhost;
+    
+    # Frontend
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+    }
+    
+    # Backend API
+    location /api {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+    }
+    
+    # WebSocket support for real-time features
+    location /socket.io/ {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+    
+    # Enable site and remove default
+    ln -sf /etc/nginx/sites-available/cybersentinel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+    
+    # Test and start Nginx
+    nginx -t >> "$LOG_FILE" 2>&1 || error_with_file "Nginx configuration test failed"
+    systemctl start nginx >> "$LOG_FILE" 2>&1
+    systemctl enable nginx >> "$LOG_FILE" 2>&1
+    
+    success "Nginx reverse proxy configured successfully"
 }
 
 # Function to setup infrastructure
@@ -532,121 +737,96 @@ EOF
     success "Application environment configured"
 }
 
-# Function to setup PM2 configuration
-setup_process_manager() {
-    header "Configuring CyberSentinel Service Manager..."
-    
-    # Create PM2 ecosystem file
-    cat > "$PROJECT_DIR/ecosystem.config.js" << EOF
-module.exports = {
-  apps: [
-    {
-      name: 'cybersentinel-data-collector',
-      script: 'scripts/new-graylog-to-kafka.js',
-      cwd: '$PROJECT_DIR',
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '500M',
-      env: {
-        NODE_ENV: 'production'
-      },
-      error_file: '/var/log/cybersentinel/data-collector-error.log',
-      out_file: '/var/log/cybersentinel/data-collector-out.log',
-      log_file: '/var/log/cybersentinel/data-collector.log'
-    },
-    {
-      name: 'cybersentinel-backend-api',
-      script: 'backend/server.js',
-      cwd: '$PROJECT_DIR',
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '1G',
-      env: {
-        NODE_ENV: 'production'
-      },
-      error_file: '/var/log/cybersentinel/backend-error.log',
-      out_file: '/var/log/cybersentinel/backend-out.log',
-      log_file: '/var/log/cybersentinel/backend.log'
-    },
-    {
-      name: 'cybersentinel-frontend-ui',
-      script: 'npm',
-      args: 'start',
-      cwd: '$PROJECT_DIR/frontend',
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '800M',
-      env: {
-        NODE_ENV: 'production'
-      },
-      error_file: '/var/log/cybersentinel/frontend-error.log',
-      out_file: '/var/log/cybersentinel/frontend-out.log',
-      log_file: '/var/log/cybersentinel/frontend.log'
-    }
-  ]
-};
-EOF
-    
-    # Create log directory
-    mkdir -p /var/log/cybersentinel
-    
-    success "Service manager configured"
-}
 
-# Function to create startup script
-create_startup_script() {
-    header "Creating CyberSentinel Service Commands..."
+# Replace the entire create_startup_script() function with this
+create_service_management_script() {
+    next_step "Creating Service Management Commands..."
     
-    # Create service management script
     cat > /usr/local/bin/cybersentinel << 'EOF'
 #!/bin/bash
 
-ECOSYSTEM_FILE="/opt/cybersentinel/SECURITY-LOG-MANAGER/ecosystem.config.js"
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+SERVICES=("cybersentinel-collector" "cybersentinel-backend" "cybersentinel-frontend")
+
 case "$1" in
     start)
         echo -e "${BLUE}Starting CyberSentinel SIEM Platform...${NC}"
-        pm2 start $ECOSYSTEM_FILE
+        for service in "${SERVICES[@]}"; do
+            systemctl start "$service"
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${GREEN}✓${NC} $service started successfully"
+            else
+                echo -e "${RED}✗${NC} Failed to start $service"
+            fi
+        done
         echo -e "${GREEN}CyberSentinel started successfully!${NC}"
-        echo -e "${BLUE}Access the dashboard at: http://$(hostname -I | awk '{print $1}'):3000${NC}"
+        echo -e "${BLUE}Access the dashboard at: http://$(hostname -I | awk '{print $1}')${NC}"
         ;;
     stop)
         echo -e "${YELLOW}Stopping CyberSentinel SIEM Platform...${NC}"
-        pm2 stop $ECOSYSTEM_FILE
+        for service in "${SERVICES[@]}"; do
+            systemctl stop "$service"
+            echo -e "${GREEN}✓${NC} $service stopped"
+        done
         echo -e "${GREEN}CyberSentinel stopped successfully!${NC}"
         ;;
     restart)
         echo -e "${YELLOW}Restarting CyberSentinel SIEM Platform...${NC}"
-        pm2 restart $ECOSYSTEM_FILE
+        for service in "${SERVICES[@]}"; do
+            systemctl restart "$service"
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${GREEN}✓${NC} $service restarted successfully"
+            else
+                echo -e "${RED}✗${NC} Failed to restart $service"
+            fi
+        done
         echo -e "${GREEN}CyberSentinel restarted successfully!${NC}"
         ;;
     status)
-        pm2 status
+        echo -e "${BLUE}CyberSentinel Service Status:${NC}"
+        for service in "${SERVICES[@]}"; do
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${GREEN}✓${NC} $service: $(systemctl is-active $service)"
+            else
+                echo -e "${RED}✗${NC} $service: $(systemctl is-active $service)"
+            fi
+        done
         ;;
     logs)
-        pm2 logs
+        echo -e "${BLUE}Select service logs to view:${NC}"
+        echo "1) Data Collector"
+        echo "2) Backend API" 
+        echo "3) Frontend UI"
+        echo "4) All services"
+        read -p "Enter choice (1-4): " choice
+        case $choice in
+            1) journalctl -f -u cybersentinel-collector ;;
+            2) journalctl -f -u cybersentinel-backend ;;
+            3) journalctl -f -u cybersentinel-frontend ;;
+            4) journalctl -f -u cybersentinel-collector -u cybersentinel-backend -u cybersentinel-frontend ;;
+            *) echo -e "${RED}Invalid choice${NC}" ;;
+        esac
         ;;
-    monitor)
-        pm2 monit
+    update)
+        cybersentinel-update update
         ;;
     *)
-        echo -e "${RED}Usage: cybersentinel {start|stop|restart|status|logs|monitor}${NC}"
+        echo -e "${RED}Usage: cybersentinel {start|stop|restart|status|logs|update}${NC}"
+        echo -e "${BLUE}Additional commands:${NC}"
+        echo -e "  ${GREEN}cybersentinel-update update${NC} - Update to latest version"
+        echo -e "  ${GREEN}cybersentinel-update backup${NC} - Create backup only"
         exit 1
         ;;
 esac
 EOF
     
     chmod +x /usr/local/bin/cybersentinel
-    
-    success "Service commands created"
+    success "Service management commands created"
 }
 
 # Function to perform final checks
@@ -715,10 +895,25 @@ EOF
     echo ""
     
     echo -e "${BLUE}=== Access Information ===${NC}"
-    echo -e "CyberSentinel Dashboard:           ${GREEN}http://$IP_ADDRESS:3000${NC}"
+    echo -e "CyberSentinel Dashboard:           ${GREEN}http://$IP_ADDRESS${NC} (via Nginx)"
+    echo -e "Direct Frontend Access:            ${GREEN}http://$IP_ADDRESS:3000${NC}"
+    echo -e "Backend API:                       ${GREEN}http://$IP_ADDRESS:5000${NC}"
     echo -e "Manual Remediation System:         ${GREEN}http://$IP_ADDRESS:80${NC} (admin:ChangeMe)"
     echo -e "Database Dashboard:                ${GREEN}http://$IP_ADDRESS:5601${NC}"
     echo -e "Secret Vault:                      ${GREEN}http://$IP_ADDRESS:8200${NC} (token: cybersentinel-vault-token)"
+    echo ""
+    
+    echo -e "${YELLOW}=== Update Management ===${NC}"
+    echo -e "Update Platform:       ${GREEN}cybersentinel update${NC}"
+    echo -e "Create Backup:         ${GREEN}cybersentinel-update backup${NC}"
+    echo -e "Manual Update:         ${GREEN}cybersentinel-update update${NC}"
+    echo ""
+    
+    echo -e "${PURPLE}=== Logging and Troubleshooting ===${NC}"
+    echo -e "Installation Logs:     ${GREEN}/var/log/cybersentinel-install.log${NC}"
+    echo -e "Update Logs:           ${GREEN}/var/log/cybersentinel-update.log${NC}"
+    echo -e "Service Logs:          ${GREEN}cybersentinel logs${NC}"
+    echo -e "System Logs:           ${GREEN}journalctl -u cybersentinel-*${NC}"
     echo ""
     
     echo -e "${YELLOW}=== First Time Setup ===${NC}"
@@ -738,13 +933,103 @@ EOF
     success "CyberSentinel SIEM Platform installation completed successfully!"
 }
 
+# NEW FUNCTION: Update CyberSentinel platform
+create_update_script() {
+    next_step "Creating Update Management System..."
+    
+    cat > /usr/local/bin/cybersentinel-update << 'EOF'
+#!/bin/bash
+
+PROJECT_DIR="/opt/cybersentinel/SECURITY-LOG-MANAGER"
+BACKUP_DIR="/opt/cybersentinel/backups"
+LOG_FILE="/var/log/cybersentinel-update.log"
+
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log_update() {
+    echo -e "${BLUE}[UPDATE]${NC} $1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [UPDATE] $1" >> "$LOG_FILE"
+}
+
+error_update() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1" >> "$LOG_FILE"
+    exit 1
+}
+
+success_update() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] $1" >> "$LOG_FILE"
+}
+
+backup_current() {
+    log_update "Creating backup of current installation..."
+    mkdir -p "$BACKUP_DIR"
+    BACKUP_NAME="cybersentinel-backup-$(date +%Y%m%d-%H%M%S)"
+    cp -r "$PROJECT_DIR" "$BACKUP_DIR/$BACKUP_NAME" || error_update "Failed to create backup"
+    success_update "Backup created: $BACKUP_DIR/$BACKUP_NAME"
+}
+
+update_platform() {
+    log_update "Stopping CyberSentinel services..."
+    systemctl stop cybersentinel-frontend cybersentinel-backend cybersentinel-collector
+    
+    log_update "Fetching latest version from GitHub..."
+    cd /opt/cybersentinel || error_update "Failed to access installation directory"
+    
+    # Backup current version
+    backup_current
+    
+    # Pull latest changes
+    cd "$PROJECT_DIR" || error_update "Failed to access project directory"
+    git fetch origin >> "$LOG_FILE" 2>&1
+    git reset --hard origin/main >> "$LOG_FILE" 2>&1 || error_update "Failed to update from repository"
+    
+    log_update "Installing updated dependencies..."
+    cd backend && npm install --force >> "$LOG_FILE" 2>&1 || error_update "Failed to update backend dependencies"
+    cd ../frontend && npm install --force >> "$LOG_FILE" 2>&1 || error_update "Failed to update frontend dependencies"
+    cd ../scripts && npm install --force >> "$LOG_FILE" 2>&1 || error_update "Failed to update script dependencies"
+    
+    # Fix permissions
+    chown -R cybersentinel:cybersentinel "$PROJECT_DIR"
+    
+    log_update "Starting CyberSentinel services..."
+    systemctl start cybersentinel-collector cybersentinel-backend cybersentinel-frontend
+    
+    success_update "CyberSentinel platform updated successfully!"
+    echo -e "${BLUE}Access the updated dashboard at: http://$(hostname -I | awk '{print $1}')${NC}"
+}
+
+case "$1" in
+    update)
+        update_platform
+        ;;
+    backup)
+        backup_current
+        ;;
+    *)
+        echo -e "${RED}Usage: cybersentinel-update {update|backup}${NC}"
+        exit 1
+        ;;
+esac
+EOF
+    
+    chmod +x /usr/local/bin/cybersentinel-update
+    success "Update management system created"
+}
+
 # Main installation function
 main() {
+    setup_logging  # Add this line at the beginning
     show_banner
     
     # Detect IP address
     IP_ADDRESS=$(get_ip_address)
-    log "Detected server IP: $IP_ADDRESS"
+    log_with_file "INFO" "Detected server IP: $IP_ADDRESS"
     
     # System checks
     check_system_requirements
@@ -759,12 +1044,12 @@ main() {
     fi
     
     # Create installation directory
-    log "Creating installation directory..."
+    next_step "Creating installation directory..."
     mkdir -p "$INSTALL_DIR"
     
-    # Installation steps
+    # Installation steps with progress tracking
     install_docker
-    install_nodejs
+    install_nodejs  # Keep this but remove PM2 installation line
     setup_infrastructure
     deploy_infrastructure
     install_manual_remediation
@@ -772,8 +1057,10 @@ main() {
     setup_main_project
     collect_graylog_config
     update_environment_files
-    setup_process_manager
-    create_startup_script
+    create_systemd_services     # NEW - Replace setup_process_manager
+    setup_nginx                 # NEW
+    create_update_script        # NEW
+    create_service_management_script  # Replace create_startup_script
     perform_final_checks
     show_completion_summary
 }
