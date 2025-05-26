@@ -734,10 +734,10 @@ EOF
 }
 
 
-# Replace the entire create_startup_script() function with this
 create_service_management_script() {
     next_step "Creating Service Management Commands..."
     
+    # Create the main control script
     cat > /usr/local/bin/cybersentinel << 'EOF'
 #!/bin/bash
 
@@ -747,52 +747,101 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-SERVICES=("cybersentinel-collector" "cybersentinel-backend" "cybersentinel-frontend")
+LOG_DIR="/var/log/cybersentinel"
+PID_DIR="/var/run/cybersentinel"
+PROJECT_DIR="/opt/cybersentinel/SECURITY-LOG-MANAGER"
+
+# Ensure directories exist
+mkdir -p "$LOG_DIR" "$PID_DIR"
+chown -R cybersentinel:cybersentinel "$LOG_DIR" "$PID_DIR"
 
 case "$1" in
     start)
         echo -e "${BLUE}Starting CyberSentinel SIEM Platform...${NC}"
-        for service in "${SERVICES[@]}"; do
-            systemctl start "$service"
-            if systemctl is-active --quiet "$service"; then
-                echo -e "${GREEN}✓${NC} $service started successfully"
-            else
-                echo -e "${RED}✗${NC} Failed to start $service"
-            fi
-        done
+        
+        # Start collector
+        echo -e "${BLUE}Starting Data Collector...${NC}"
+        cd "$PROJECT_DIR/scripts"
+        nohup node new-graylog-to-kafka.js > "$LOG_DIR/collector.log" 2>&1 &
+        echo $! > "$PID_DIR/collector.pid"
+        sleep 4
+        
+        # Start backend
+        echo -e "${BLUE}Starting Backend API...${NC}"
+        cd "$PROJECT_DIR/backend"
+        nohup npm start > "$LOG_DIR/backend.log" 2>&1 &
+        echo $! > "$PID_DIR/backend.pid"
+        sleep 4
+        
+        # Start frontend
+        echo -e "${BLUE}Starting Frontend UI...${NC}"
+        cd "$PROJECT_DIR/frontend"
+        nohup npm start > "$LOG_DIR/frontend.log" 2>&1 &
+        echo $! > "$PID_DIR/frontend.pid"
+        
         echo -e "${GREEN}CyberSentinel started successfully!${NC}"
         echo -e "${BLUE}Access the dashboard at: http://$(hostname -I | awk '{print $1}')${NC}"
         ;;
+        
     stop)
         echo -e "${YELLOW}Stopping CyberSentinel SIEM Platform...${NC}"
-        for service in "${SERVICES[@]}"; do
-            systemctl stop "$service"
-            echo -e "${GREEN}✓${NC} $service stopped"
-        done
+        
+        # Stop frontend
+        if [ -f "$PID_DIR/frontend.pid" ]; then
+            echo -e "${BLUE}Stopping Frontend UI...${NC}"
+            kill -9 $(cat "$PID_DIR/frontend.pid") 2>/dev/null
+            rm -f "$PID_DIR/frontend.pid"
+        fi
+        
+        # Stop backend
+        if [ -f "$PID_DIR/backend.pid" ]; then
+            echo -e "${BLUE}Stopping Backend API...${NC}"
+            kill -9 $(cat "$PID_DIR/backend.pid") 2>/dev/null
+            rm -f "$PID_DIR/backend.pid"
+        fi
+        
+        # Stop collector
+        if [ -f "$PID_DIR/collector.pid" ]; then
+            echo -e "${BLUE}Stopping Data Collector...${NC}"
+            kill -9 $(cat "$PID_DIR/collector.pid") 2>/dev/null
+            rm -f "$PID_DIR/collector.pid"
+        fi
+        
         echo -e "${GREEN}CyberSentinel stopped successfully!${NC}"
         ;;
+        
     restart)
         echo -e "${YELLOW}Restarting CyberSentinel SIEM Platform...${NC}"
-        for service in "${SERVICES[@]}"; do
-            systemctl restart "$service"
-            if systemctl is-active --quiet "$service"; then
-                echo -e "${GREEN}✓${NC} $service restarted successfully"
-            else
-                echo -e "${RED}✗${NC} Failed to restart $service"
-            fi
-        done
-        echo -e "${GREEN}CyberSentinel restarted successfully!${NC}"
+        $0 stop
+        sleep 2
+        $0 start
         ;;
+        
     status)
         echo -e "${BLUE}CyberSentinel Service Status:${NC}"
-        for service in "${SERVICES[@]}"; do
-            if systemctl is-active --quiet "$service"; then
-                echo -e "${GREEN}✓${NC} $service: $(systemctl is-active $service)"
-            else
-                echo -e "${RED}✗${NC} $service: $(systemctl is-active $service)"
-            fi
-        done
+        
+        # Check collector
+        if [ -f "$PID_DIR/collector.pid" ] && ps -p $(cat "$PID_DIR/collector.pid") > /dev/null; then
+            echo -e "${GREEN}✓${NC} Data Collector: RUNNING (PID: $(cat "$PID_DIR/collector.pid"))"
+        else
+            echo -e "${RED}✗${NC} Data Collector: NOT RUNNING"
+        fi
+        
+        # Check backend
+        if [ -f "$PID_DIR/backend.pid" ] && ps -p $(cat "$PID_DIR/backend.pid") > /dev/null; then
+            echo -e "${GREEN}✓${NC} Backend API: RUNNING (PID: $(cat "$PID_DIR/backend.pid"))"
+        else
+            echo -e "${RED}✗${NC} Backend API: NOT RUNNING"
+        fi
+        
+        # Check frontend
+        if [ -f "$PID_DIR/frontend.pid" ] && ps -p $(cat "$PID_DIR/frontend.pid") > /dev/null; then
+            echo -e "${GREEN}✓${NC} Frontend UI: RUNNING (PID: $(cat "$PID_DIR/frontend.pid"))"
+        else
+            echo -e "${RED}✗${NC} Frontend UI: NOT RUNNING"
+        fi
         ;;
+        
     logs)
         echo -e "${BLUE}Select service logs to view:${NC}"
         echo "1) Data Collector"
@@ -800,25 +849,38 @@ case "$1" in
         echo "3) Frontend UI"
         echo "4) All services"
         read -p "Enter choice (1-4): " choice
+        
         case $choice in
-            1) journalctl -f -u cybersentinel-collector ;;
-            2) journalctl -f -u cybersentinel-backend ;;
-            3) journalctl -f -u cybersentinel-frontend ;;
-            4) journalctl -f -u cybersentinel-collector -u cybersentinel-backend -u cybersentinel-frontend ;;
+            1) tail -f "$LOG_DIR/collector.log" ;;
+            2) tail -f "$LOG_DIR/backend.log" ;;
+            3) tail -f "$LOG_DIR/frontend.log" ;;
+            4) multitail "$LOG_DIR/collector.log" "$LOG_DIR/backend.log" "$LOG_DIR/frontend.log" ;;
             *) echo -e "${RED}Invalid choice${NC}" ;;
         esac
         ;;
-    update)
-        cybersentinel-update update
-        ;;
+        
     *)
-        echo -e "${RED}Usage: cybersentinel {start|stop|restart|status|logs|update}${NC}"
-        echo -e "${BLUE}Additional commands:${NC}"
-        echo -e "  ${GREEN}cybersentinel-update update${NC} - Update to latest version"
-        echo -e "  ${GREEN}cybersentinel-update backup${NC} - Create backup only"
+        echo -e "${RED}Usage: $0 {start|stop|restart|status|logs}${NC}"
         exit 1
         ;;
 esac
+EOF
+    
+    # Create log rotation configuration
+    cat > /etc/logrotate.d/cybersentinel << 'EOF'
+/var/log/cybersentinel/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 cybersentinel cybersentinel
+    sharedscripts
+    postrotate
+        [ -f /var/run/syslogd.pid ] && kill -USR1 $(cat /var/run/syslogd.pid)
+    endscript
+}
 EOF
     
     chmod +x /usr/local/bin/cybersentinel
