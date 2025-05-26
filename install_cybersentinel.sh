@@ -205,27 +205,10 @@ install_docker() {
     log "Updating package lists..."
     apt update || error "Failed to update package lists."
     
-    # Install prerequisites
-    log "Installing prerequisites..."
-    apt install -y apt-transport-https ca-certificates curl software-properties-common || error "Failed to install prerequisites."
-    
-    # Add Docker's official GPG key
-    log "Adding Docker's GPG key..."
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - || error "Failed to add Docker's GPG key."
-    
-    # Add Docker repository
-    log "Adding Docker repository..."
-    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" || error "Failed to add Docker repository."
-    
     # Install Docker
     log "Installing Docker..."
     apt update
-    apt install -y docker-ce docker-ce-cli containerd.io || error "Failed to install Docker."
-    
-    # Install Docker Compose
-    log "Installing Docker Compose..."
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || error "Failed to download Docker Compose."
-    chmod +x /usr/local/bin/docker-compose || error "Failed to set permissions for Docker Compose."
+    apt install -qq docker.io -y  || error "Failed to install Docker."
     
     success "Docker and Docker Compose have been successfully installed!"
 }
