@@ -191,45 +191,41 @@ EOF
     echo ""
 }
 
-# Replace the entire install_docker() function with this enhanced version
+# Install Docker and Docker Compose
 install_docker() {
-    next_step "Installing Docker and Docker Compose..."
+    log "Starting Docker installation..."
     
     # Check if Docker is already installed
     if command_exists docker && command_exists docker-compose; then
-        log_with_file "INFO" "Docker and Docker Compose are already installed!"
+        success "Docker and Docker Compose are already installed!"
         return
     fi
     
     # Update package lists
-    log_with_file "INFO" "Updating package lists..."
-    apt update >> "$LOG_FILE" 2>&1 || error_with_file "Failed to update package lists."
+    log "Updating package lists..."
+    apt update || error "Failed to update package lists."
     
     # Install prerequisites
-    log_with_file "INFO" "Installing prerequisites..."
-    apt install -y apt-transport-https ca-certificates curl software-properties-common >> "$LOG_FILE" 2>&1 || error_with_file "Failed to install prerequisites."
+    log "Installing prerequisites..."
+    apt install -y apt-transport-https ca-certificates curl software-properties-common || error "Failed to install prerequisites."
     
     # Add Docker's official GPG key
-    log_with_file "INFO" "Adding Docker's GPG key..."
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - >> "$LOG_FILE" 2>&1 || error_with_file "Failed to add Docker's GPG key."
+    log "Adding Docker's GPG key..."
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add - || error "Failed to add Docker's GPG key."
     
     # Add Docker repository
-    log_with_file "INFO" "Adding Docker repository..."
-    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" >> "$LOG_FILE" 2>&1 || error_with_file "Failed to add Docker repository."
+    log "Adding Docker repository..."
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" || error "Failed to add Docker repository."
     
     # Install Docker
-    log_with_file "INFO" "Installing Docker..."
-    apt update >> "$LOG_FILE" 2>&1
-    apt install -y docker-ce docker-ce-cli containerd.io >> "$LOG_FILE" 2>&1 || error_with_file "Failed to install Docker."
+    log "Installing Docker..."
+    apt update
+    apt install -y docker-ce docker-ce-cli containerd.io || error "Failed to install Docker."
     
     # Install Docker Compose
-    log_with_file "INFO" "Installing Docker Compose..."
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose >> "$LOG_FILE" 2>&1 || error_with_file "Failed to download Docker Compose."
-    chmod +x /usr/local/bin/docker-compose >> "$LOG_FILE" 2>&1 || error_with_file "Failed to set permissions for Docker Compose."
-    
-    # Start and enable Docker
-    systemctl start docker >> "$LOG_FILE" 2>&1
-    systemctl enable docker >> "$LOG_FILE" 2>&1
+    log "Installing Docker Compose..."
+    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || error "Failed to download Docker Compose."
+    chmod +x /usr/local/bin/docker-compose || error "Failed to set permissions for Docker Compose."
     
     success "Docker and Docker Compose have been successfully installed!"
 }
