@@ -620,16 +620,40 @@ setup_main_project() {
     
     log "Downloading CyberSentinel SIEM Platform..."
     
-    # Clone the project
+    # Clone or update the project
     if [ -d "SECURITY-LOG-MANAGER" ]; then
-        rm -rf SECURITY-LOG-MANAGER
+        log "Updating existing installation..."
+        cd SECURITY-LOG-MANAGER || error "Failed to enter project directory"
+        
+        # Backup config files
+        log "Backing up configuration files..."
+        mkdir -p /tmp/cybersentinel_configs
+        cp backend/.env /tmp/cybersentinel_configs/backend.env 2>/dev/null || true
+        cp frontend/.env /tmp/cybersentinel_configs/frontend.env 2>/dev/null || true
+        
+        # Clean and update repository
+        sudo -u cybersentinel git stash push --include-untracked --message "Auto-stash before update"
+        sudo -u cybersentinel git fetch origin main
+        sudo -u cybersentinel git reset --hard origin/main
+        sudo -u cybersentinel git clean -fd
+        
+        # Restore config files
+        log "Restoring configuration files..."
+        cp /tmp/cybersentinel_configs/backend.env backend/.env 2>/dev/null || true
+        cp /tmp/cybersentinel_configs/frontend.env frontend/.env 2>/dev/null || true
+        rm -rf /tmp/cybersentinel_configs
+    else
+        log "Performing fresh installation..."
+        git clone https://github.com/rakshitpatil2003/SECURITY-LOG-MANAGER.git >/dev/null 2>&1 || error "Failed to download CyberSentinel platform"
+        cd SECURITY-LOG-MANAGER || error "Failed to access project directory"
+        
+        # Set safe directory for Git
+        sudo -u cybersentinel git config --global --add safe.directory /opt/cybersentinel/SECURITY-LOG-MANAGER
+        sudo -u cybersentinel git config --global --add safe.directory /opt/cybersentinel/SECURITY-LOG-MANAGER/backend
+        sudo -u cybersentinel git config --global --add safe.directory /opt/cybersentinel/SECURITY-LOG-MANAGER/frontend
     fi
     
-    git clone https://github.com/rakshitpatil2003/SECURITY-LOG-MANAGER.git >/dev/null 2>&1 || error "Failed to download CyberSentinel platform"
-    
-    cd SECURITY-LOG-MANAGER || error "Failed to access project directory"
-    
-    # Install dependencies for all components
+    # Install dependencies
     log "Installing backend dependencies..."
     cd backend && npm install --force >/dev/null 2>&1 || error "Failed to install backend dependencies"
     
@@ -981,82 +1005,8 @@ create_update_script() {
     cat > /usr/local/bin/cybersentinel-update << 'EOF'
 #!/bin/bash
 
-PROJECT_DIR="/opt/cybersentinel/SECURITY-LOG-MANAGER"
-BACKUP_DIR="/opt/cybersentinel/backups"
-LOG_FILE="/var/log/cybersentinel-update.log"
-
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-log_update() {
-    echo -e "${BLUE}[UPDATE]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [UPDATE] $1" >> "$LOG_FILE"
-}
-
-error_update() {
-    echo -e "${RED}[ERROR]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1" >> "$LOG_FILE"
-    exit 1
-}
-
-success_update() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [SUCCESS] $1" >> "$LOG_FILE"
-}
-
-backup_current() {
-    log_update "Creating backup of current installation..."
-    mkdir -p "$BACKUP_DIR"
-    BACKUP_NAME="cybersentinel-backup-$(date +%Y%m%d-%H%M%S)"
-    cp -r "$PROJECT_DIR" "$BACKUP_DIR/$BACKUP_NAME" || error_update "Failed to create backup"
-    success_update "Backup created: $BACKUP_DIR/$BACKUP_NAME"
-}
-
-update_platform() {
-    log_update "Stopping CyberSentinel services..."
-    systemctl stop cybersentinel-frontend cybersentinel-backend cybersentinel-collector
-    
-    log_update "Fetching latest version from GitHub..."
-    cd /opt/cybersentinel || error_update "Failed to access installation directory"
-    
-    # Backup current version
-    backup_current
-    
-    # Pull latest changes
-    cd "$PROJECT_DIR" || error_update "Failed to access project directory"
-    git fetch origin >> "$LOG_FILE" 2>&1
-    git reset --hard origin/main >> "$LOG_FILE" 2>&1 || error_update "Failed to update from repository"
-    
-    log_update "Installing updated dependencies..."
-    cd backend && npm install --force >> "$LOG_FILE" 2>&1 || error_update "Failed to update backend dependencies"
-    cd ../frontend && npm install --force >> "$LOG_FILE" 2>&1 || error_update "Failed to update frontend dependencies"
-    cd ../scripts && npm install --force >> "$LOG_FILE" 2>&1 || error_update "Failed to update script dependencies"
-    
-    # Fix permissions
-    chown -R cybersentinel:cybersentinel "$PROJECT_DIR"
-    
-    log_update "Starting CyberSentinel services..."
-    systemctl start cybersentinel-collector cybersentinel-backend cybersentinel-frontend
-    
-    success_update "CyberSentinel platform updated successfully!"
-    echo -e "${BLUE}Access the updated dashboard at: http://$(hostname -I | awk '{print $1}')${NC}"
-}
-
-case "$1" in
-    update)
-        update_platform
-        ;;
-    backup)
-        backup_current
-        ;;
-    *)
-        echo -e "${RED}Usage: cybersentinel-update {update|backup}${NC}"
-        exit 1
-        ;;
-esac
+# Simple wrapper that re-runs the installation script in update mode
+/opt/cybersentinel/install_cybersentinel.sh --update
 EOF
     
     chmod +x /usr/local/bin/cybersentinel-update
@@ -1087,6 +1037,12 @@ main() {
     # Create installation directory
     next_step "Creating installation directory..."
     mkdir -p "$INSTALL_DIR"
+
+    # Process command line arguments
+    if [ "$1" == "--update" ]; then
+        setup_main_project
+        exit 0
+    fi
     
     # Installation steps with progress tracking
     install_docker
